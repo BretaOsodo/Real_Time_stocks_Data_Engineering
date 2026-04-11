@@ -1,0 +1,10 @@
+[project]
+name = "real-time-stock-data-engineering"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "apache-airflow>=3.2.0",
+    "yfinance>=1.2.1",
+]

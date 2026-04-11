@@ -1,0 +1,7 @@
+confluent-kafka
+yfinance
+boto3
+pyarrow
+apache-airflow
+psycopg2-binary
+pyspark
