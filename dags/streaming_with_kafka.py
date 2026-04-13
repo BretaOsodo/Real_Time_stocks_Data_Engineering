@@ -28,80 +28,102 @@ def Streaming_with_kafka():
             start="2024-01-01",
             end= datetime.now().strftime("%Y-%m-%d"),
             interval="1d")
-        
-        return data 
+        #check if the columns are multiindex 
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+            logger.info('Flattened Multiindex Columns ')
+        #make data a column 
+        data_reset= data.reset_index()
+
+        #convert to a serializable format 
+        records =[]
+        for _, row in data_reset.iterrows():
+            record={}
+            for col,value in row.items():
+                if isinstance(value,pd.Timestamp):
+                    record[col]=value.isoformat() #convert to ISO format string 
+                elif isinstance(value,(pd.Series,pd.DataFrame)):
+                    #Handles nested data structure like multi-index columns 
+                    record[col]=str(value)
+
+                else:
+                    record[col]=str(value)
+            records.append(record)
+        logger.info(f"Converted {len(records)} records to serializable format")
+        return records 
+
+
+    @task.branch(task_id='check_data-availability')
+    def check_data_availability(data):
+        if json_data is None or len(data)==0:
+            logger.info("No data available, routing to no_data task")
+            return 'no_data'
+        else:
+            logger.info(f"Data available with {len(data)} records,routing to check_and_convert_data_to_jason task")
+            return 'check_and_convert_data_to_json'
     
     @task.python(task_id='check_and_convert_data_to_json')
     def check_and_convert_data_to_json(data):
-        """
-        Check data type and convert to json 
-        Handles : DataFrame, CSV string, dict, list
-        """
-
-        #check the type of incoming data 
-        data_type = type(data).__name__
-        logger.info("Checking the type of incoming data")
-        print(f"Received Data type: {data_type}")
-
-        #initialize variable for json output 
-        json_output= None 
-
-        #Case1: Pandas Dataframe
-        if isinstance(data, pd.DataFrame):
-            print('Detected: pandas Dataframa')
-            print(f"shape: {data.shape}")
-            print(f"columns:{list(data.columns)}")
-
-            json_output=data.to_json(orient='records',date_format='iso')
-
-        #case2 : CSV string
-        elif isinstance(data,str) and (data.endswith('.csv') or',' in data[:100]):
-            print('Detected a CSV file ')
-
-            #read the csv into dataframe first 
-            from io import StringIO
-            df = pd.read_csv(StringIO(data))
-            json_output=df.to_json(orient='records',data_format='iso')
-
-        #case 3: Dictionary 
-        elif isinstance(data,dict):
-            print('Detected a Dictionary ')
-            json_output=json.dumps(data, default=str)
-
-        #case 4 : list 
-        elif isinstance(data, list):
-            print("detected a list")
-            json_output=json.dumps(data, default=str)
-
-        #case 5 : Already json string 
-        elif isinstance(data,str):
-            print('Detected string(Checking if its JSON)')
-            try:
-                #validate if it's already json
-                json_output=json.loads(data)
-                print('Already Valid Json')
-            except json.JSONDecodeError:
-                print('INVALID JSON')
-                json_output= None 
-        else:
-            print(f"Unknown datatype:{data_type}")
-            json_output=json.dumps({'value':str(data)}, default= str)
-
-        return json_output
-    
-    #a task to return no data if there is no data from the api 
-    @task.branch(task_id='check_data-availability')
-    def check_data_availability(json_data):
-        if json_data is None:
-            return 'no_data'
-        else:
-            return 'check_and_convert_data_to_json'
+       """
+       Ensure data is properly formatted as JSON string 
+       Data is already a dict?list from get_stock_price
+       """
+       
+       #convert to JSON string 
+       try:
+           logger.info("Converting to JSON string")
+           json_string=json.dumps(data,default=str)
+           logger.info(f"Successfully converted data to JSon . Size:{len(json_string)}")
+           return json_string
+       except Exception as e:
+           logger.error(f"Failed to convert data to JSON:{e}")
+           return None 
         
     # A task to return empty data is there is no data 
     @task.python(task_id='no_data')
     def no_data():
+        """
+        Handles case when no data is available
+        Returns No data 
+        """
         logger.warning('No data from the yfinance API')       
     
+
+    @task.python(task_id='kafa_producer')
+    def kafka_producer(data):
+        from confluent_kafka import Producer 
+
+        #producer configaration 
+        producer_config={
+            "bootstrap.servers":"kafka:9092"
+        }
+
+        producer= Producer(producer_config)
+
+        #delivery function 
+        def delivery_report(err,msg):
+            if err:
+                print(f'Message delivery failed: {err}')
+
+            else:
+                print(f'Message delivered to {msg.topic()}')
+
+        #send the message 
+        value= json.dumps(data).encode('utf-8')
+        producer.produce(
+            topic='apple_stocks_data',
+            value=value,
+            callback=delivery_report
+        )
+        producer.poll(0)
+        #wait for all messages 
+        remaining=producer.flush(10)
+
+        if remaining> 0:
+            print(f"{remaining} message not delivered!")
+        else:
+            print("All messages delivered successfully!")
+
     #set dependencies 
     getting_data = get_stock_data()
     branch = check_data_availability(getting_data)
@@ -109,10 +131,13 @@ def Streaming_with_kafka():
     json_data = check_and_convert_data_to_json(getting_data)
     no_data_results= no_data()
 
+    producing_data=kafka_producer(json_data)
+
 
     #set the task flow 
     getting_data >> branch
-    branch >> [json_data,no_data_results]
+    branch >>json_data>> producing_data
+    branch>>no_data_results
 
 #instanciate the dag 
 Streaming_with_kafka()
