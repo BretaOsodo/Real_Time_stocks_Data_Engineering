@@ -3,6 +3,12 @@ from datetime import datetime,timedelta
 import logging
 import pandas as pd 
 import json
+import os 
+from dotenv import load_dotenv
+import boto3
+from botocore.exceptions import ClientError
+import io
+import pandas as pd 
 
 
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +34,8 @@ def Streaming_with_kafka():
             start="2024-01-01",
             end= datetime.now().strftime("%Y-%m-%d"),
             interval="1d")
+        
+        
         #check if the columns are multiindex 
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
@@ -86,8 +94,92 @@ def Streaming_with_kafka():
         Handles case when no data is available
         Returns No data 
         """
-        logger.warning('No data from the yfinance API')       
-    
+        logger.warning('No data from the yfinance API')     
+
+    # A task to load the Raw data to Minio 
+    @task.python(task_id='Load_raw_to_minio')  
+    def Load_raw_to_minio(data):
+
+        load_dotenv()
+
+        #converting the parsed data to dictionary 
+        parsed_data = json.loads(data)
+
+        #convert to dataframe 
+        df=pd.DataFrame(parsed_data if isinstance(parsed_data,list) else [parsed_data])
+
+
+        #minio configarations 
+        minio_endpoint= os.getenv('MINIO_ENDPOINT')
+        minio_access_key = os.getenv('MINIO_ACCESS_KEY')
+        minio_secret_key = os.getenv('MINIO_SECRET_KEY')
+        minio_bucket = os.getenv('MINIO_BUCKET')
+
+        #validate the configurations 
+        if not all([minio_access_key,minio_bucket,minio_endpoint,minio_secret_key]):
+            missing = [val for val, var in [
+                ('MINIO_ENDPOINT',minio_endpoint),
+                ('MINIO_ACCESS_KEY',minio_access_key),
+                ('MINIO_SECRET_KEY',minio_secret_key),
+                ('MINIO_BUCKET',minio_bucket)
+            ] if not val]
+            raise ValueError(f"Missing requirements:{missing}")
+        
+        #connect to minio 
+        logger.info('Connecting to MinIO')
+        apple_client= boto3.client(
+            's3',
+            aws_access_key_id = minio_access_key,
+            aws_secret_access_key= minio_secret_key,
+            endpoint_url = minio_endpoint,
+            verify = False 
+        )
+
+        #List all the existing buckets 
+        logger.info('Listing the Existing buckets in MinIO')
+        try:
+            buckets=apple_client.list_buckets()
+            buckets_name = [b['Name'] for b in buckets['Buckets']]
+            logger.info(f'Found {len(buckets_name)} and the are: {list(buckets_name)}')
+        except Exception as e:
+            logger.error(f'No bucket found {e}')
+
+        #check if the bucket exists and it doesn't create one 
+        try:
+            apple_client.create_bucket(Bucket=minio_bucket)
+            logger.info(f'Successfully created bucket:{minio_bucket}')
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code in ['BucketAlreadyOwnedByYou', 'BucketAlreadyExists']:
+                logger.error(f'Bucket alreadt exists:{minio_bucket}')
+            else:
+                logger.error(f'Failed to create the bucket:{e}')
+                raise 
+        #convert data to csv in memory 
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer,index= False)
+        csv_content=csv_buffer.getvalue().encode('utf-8')
+
+        #create the file path 
+        object_key=f"stock/data/apple_stock_prices.csv"
+
+        #upload to minio bucket 
+        apple_client.put_object(
+            Bucket=minio_bucket,
+            Key= object_key,
+            Body= csv_content,
+            ContentType='text/csv'
+
+        )
+
+        logger.info(f'Successfully uploaded{object_key} to bucket {minio_bucket}')
+        
+        #returning the path of the bucket
+        logger.info('Returning the path of the file ')
+        return f's3://{minio_bucket}/{object_key}'
+
+
+
 
     @task.python(task_id='kafa_producer')
     def kafka_producer(data):
@@ -132,11 +224,12 @@ def Streaming_with_kafka():
     no_data_results= no_data()
 
     producing_data=kafka_producer(json_data)
+    loading_minio=Load_raw_to_minio(json_data)
 
 
     #set the task flow 
     getting_data >> branch
-    branch >>json_data>> producing_data
+    branch >>json_data>>[ producing_data,loading_minio]
     branch>>no_data_results
 
 #instanciate the dag 
