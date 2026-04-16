@@ -8,5 +8,7 @@ dependencies = [
     "apache-airflow>=3.2.0",
     "boto3>=1.42.89",
     "confluent-kafka>=2.14.0",
+    "pydantic>=2.12.5",
+    "pytest>=9.0.3",
     "yfinance>=1.2.1",
 ]

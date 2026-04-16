@@ -55,10 +55,107 @@ def Streaming_with_kafka():
                     record[col]=str(value)
 
                 else:
-                    record[col]=str(value)
+                    record[col]= value
             records.append(record)
         logger.info(f"Converted {len(records)} records to serializable format")
         return records 
+    #create a task to validate the data before loading to MinIo 
+    @task.python(task_id='validate_json_data')
+    def validate_json_data(data):
+        logger.info('validating the Data we get from the api')
+        #import the pydantic and typing packages 
+        from pydantic import BaseModel, PositiveInt, Field, field_validator
+        from decimal import Decimal
+        from typing import Annotated
+        from datetime import datetime 
+
+        class Stock(BaseModel):
+            Open: Annotated [
+                Decimal,
+                Field (
+                    title='Opening Price',
+                    description='The Opening price os apple stocks',
+                    gt=0,
+                    max_digits=30,
+                    decimal_places=20
+                )
+            ]
+            Close: Annotated [
+                Decimal,
+                Field(
+                    title='Closing Proce',
+                    description='Closing price of the apple stock',
+                    gt=0,
+                    max_digits=30,
+                    decimal_places=20
+                )
+            ]
+
+            High: Annotated [
+                Decimal,
+                Field (
+                    title='High Price',
+                    description='This is the highest price of the day of the apple stock',
+                    gt=0,
+                    max_digits=30,
+                    decimal_places=20
+                )
+            ]
+
+            Low : Annotated [
+                Decimal,
+                Field (
+                    title='Lower price',
+                    description='The lowest Price of the apple stock of that day',
+                    gt=0,
+                    max_digits=30,
+                    decimal_places=20
+                )
+            ]
+            Volume : Annotated[
+                PositiveInt,
+                Field(
+                    title='Volume of Stock',
+                    description='The volume of the apple stocks that day',
+                    gt=0
+                )
+            ]
+
+            Date: Annotated[
+                datetime,
+                Field(
+                    title='Date',
+                    description='The date the stocks were traded',
+
+                )
+            ]
+            #======================================================
+            """
+            Returned Data has Decimal places more than 4.
+            Return data with 4 decimal places 
+            """
+            #======================================================
+
+            @field_validator('Date')
+            @classmethod
+            def validate_date(cls,value):
+                if value > datetime.now():
+                    raise ValueError ('Date cannot be in the Future')
+                return value
+            
+            
+
+        validated=[]
+        for record in data:
+            try:
+                object= Stock(**record)
+                validated.append(object.model_dump())
+
+            except Exception as e:
+                logger.error(f"validation failed for the record: {record} error:{e}")
+            
+        return validated
+
 
 
     @task.branch(task_id='check_data-availability')
@@ -95,6 +192,7 @@ def Streaming_with_kafka():
         Returns No data 
         """
         logger.warning('No data from the yfinance API')     
+    
 
     # A task to load the Raw data to Minio 
     @task.python(task_id='Load_raw_to_minio')  
@@ -218,17 +316,18 @@ def Streaming_with_kafka():
 
     #set dependencies 
     getting_data = get_stock_data()
-    branch = check_data_availability(getting_data)
+    validating_data=validate_json_data(getting_data)
+    branch = check_data_availability(validating_data)
 
-    json_data = check_and_convert_data_to_json(getting_data)
+    json_data = check_and_convert_data_to_json(validating_data)
     no_data_results= no_data()
 
-    producing_data=kafka_producer(json_data)
-    loading_minio=Load_raw_to_minio(json_data)
+    producing_data = kafka_producer(json_data)
+    loading_minio= Load_raw_to_minio(json_data)
 
 
     #set the task flow 
-    getting_data >> branch
+    getting_data >> validating_data >> branch
     branch >>json_data>>[ producing_data,loading_minio]
     branch>>no_data_results
 
