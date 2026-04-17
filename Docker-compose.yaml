@@ -372,19 +372,21 @@ services:
       - data_pipeline
 
   spark-master:
-    image: apache/spark:4.0.2-scala2.13-java17-python3-r-ubuntu
+    build: .
+    image: spark-custom:latest
     container_name: spark-master
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     ports:
       - "9090:8080"
-      - "7070:7077"
+      - "7077:7077"
     volumes:
-      - ./jobs:/opt/spark/jobs
+      - ./jobs:/opt/spark_jobs/jobs
     networks:
       - data_pipeline
+    restart: unless-stopped
   
   spark-worker:
-    image: apache/spark:4.0.2-scala2.13-java17-python3-r-ubuntu
+    image: spark-custom:latest
     container_name: spark-worker
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     depends_on:
@@ -395,9 +397,10 @@ services:
       SPARK_WORKER_MEMORY: 1g
       SPARK_MASTER_URL: spark://spark-master:7077
     volumes:
-      - ./jobs:/opt/spark/jobs
+      - ./jobs:/opt/spark_jobs/jobs
     networks:
       - data_pipeline
+    restart: unless-stopped
 volumes:
   postgres-db-volume:
   kafka_kraft:
