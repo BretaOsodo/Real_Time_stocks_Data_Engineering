@@ -357,6 +357,8 @@ services:
   minio:
     image: minio/minio:latest
     container_name: minio
+    env_file:
+      - .env
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -366,6 +368,34 @@ services:
       - "9002:9000"
     volumes:
       - minio_data:/data
+    networks:
+      - data_pipeline
+
+  spark-master:
+    image: apache/spark:4.0.2-scala2.13-java17-python3-r-ubuntu
+    container_name: spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    ports:
+      - "9090:8080"
+      - "7070:7077"
+    volumes:
+      - ./jobs:/opt/spark/jobs
+    networks:
+      - data_pipeline
+  
+  spark-worker:
+    image: apache/spark:4.0.2-scala2.13-java17-python3-r-ubuntu
+    container_name: spark-worker
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1g
+      SPARK_MASTER_URL: spark://spark-master:7077
+    volumes:
+      - ./jobs:/opt/spark/jobs
     networks:
       - data_pipeline
 volumes:
