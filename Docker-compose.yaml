@@ -410,10 +410,29 @@ services:
     networks:
       - data_pipeline
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.0.0
+    container_name: prometheus
+    ports:
+      - "9094:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+    depends_on:
+      - kafka
+    networks:
+      - data_pipeline
+  alertmanager:
+    image: prom/alertmanager
+    ports:
+      - "59093:9093"
+    networks:
+      - data_pipeline
 volumes:
   postgres-db-volume:
   kafka_kraft:
   minio_data:
+  prometheus-data:
 networks:
   data_pipeline:
     driver: bridge 
