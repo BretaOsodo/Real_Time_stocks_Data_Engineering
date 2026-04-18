@@ -14,7 +14,7 @@ scrape_configs:
     scrape_interval: 10s
     scrape_timeout: 10s
     static_configs:
-      - targets: ['kafka:9092']
+      - targets: ['kafka-exporter:9308']
         labels:
           service: 'kafka'
           tier: "Streaming"
