@@ -4,6 +4,10 @@ from datetime import datetime , timedelta
 import os
 from dotenv import load_dotenv
 import json
+import logging 
+
+logging.basicConfig(level=logging.INFO)
+logger= logging.getLogger(__name__)
 
 @dag(
     dag_id='batch_processing',
@@ -37,6 +41,13 @@ def batch_processing():
         minio_access_key = os.getenv('MINIO_ACCESS_KEY')
         minio_secret_key = os.getenv('MINIO_SECRET_KEY')
         minio_bucket = os.getenv('MINIO_BUCKET_ALPHA')
+
+        #validate the configarations 
+        logger.info('Validating the minio configarations')
+        if not all([minio_access_key,minio_bucket,minio_endpoint_url,minio_secret_key]):
+            missing = [val for val, var in [
+                ('MINIO_ACCESS_KEY')
+            ]]
 
     #set dependencies 
     getting_data = get_data_from_alpha_vantage()

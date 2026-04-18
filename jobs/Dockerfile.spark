@@ -1,0 +1,39 @@
+FROM apache/spark:3.5.3
+
+USER root
+
+# Update and install only necessary packages
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip3 install --no-cache-dir boto3 psycopg2-binary python-dotenv
+
+# Spark JAR directory
+ENV SPARK_JARS_DIR=/opt/spark/jars
+
+# Download external connectors with retry logic
+RUN set -e && \
+    mkdir -p ${SPARK_JARS_DIR} && \
+    cd ${SPARK_JARS_DIR} && \
+    curl -fSL --retry 5 --retry-delay 5 --connect-timeout 30 \
+        https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
+        -o hadoop-aws-3.3.4.jar && \
+    curl -fSL --retry 5 --retry-delay 5 --connect-timeout 30 \
+        https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar \
+        -o aws-java-sdk-bundle-1.12.262.jar && \
+    curl -fSL --retry 5 --retry-delay 5 --connect-timeout 30 \
+        https://repo1.maven.org/maven2/org/postgresql/postgresql/42.6.0/postgresql-42.6.0.jar \
+        -o postgresql-42.6.0.jar
+
+# Create directory and set permissions
+RUN mkdir -p /home/spark/.ivy2 && \
+    chown -R spark:spark /home/spark
+
+USER spark
+
+WORKDIR /opt/spark_jobs
+
+COPY jobs/spark_batching_jobs.py jobs/spark_streaming_jobs.py ./

@@ -1,5 +1,6 @@
 from airflow.sdk import dag,task
 from datetime import datetime,timedelta
+
 import logging
 import pandas as pd 
 import json
@@ -9,7 +10,7 @@ import boto3
 from botocore.exceptions import ClientError
 import io
 import pandas as pd 
-
+import subprocess
 
 logging.basicConfig(level=logging.INFO)
 logger= logging.getLogger(__name__)
@@ -18,7 +19,7 @@ logger= logging.getLogger(__name__)
 
 @dag(
     dag_id='Streaming_with_kafka',
-    schedule=timedelta(minutes=30),
+    schedule=timedelta(seconds=30),
     start_date = datetime(2026,4,11),
     end_date= None,
     catchup=False 
@@ -313,6 +314,8 @@ def Streaming_with_kafka():
             print(f"{remaining} message not delivered!")
         else:
             print("All messages delivered successfully!")
+    
+
 
     #set dependencies 
     getting_data = get_stock_data()
@@ -324,12 +327,21 @@ def Streaming_with_kafka():
 
     producing_data = kafka_producer(json_data)
     loading_minio= Load_raw_to_minio(json_data)
+    
 
 
-    #set the task flow 
-    getting_data >> validating_data >> branch
-    branch >>json_data>>[ producing_data,loading_minio]
-    branch>>no_data_results
+    # Flow
+    getting_data >> validating_data>>branch
+    branch >> json_data
+
+    #parallel execution 
+    json_data >> producing_data
+    json_data >> loading_minio
+
+    
+
+    #no data path 
+    branch >> no_data_results
 
 #instanciate the dag 
 Streaming_with_kafka()
