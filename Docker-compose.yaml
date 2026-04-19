@@ -331,6 +331,13 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_OFFSET_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
 
     volumes:
       - kafka_kraft:/var/lib/kafka/data
@@ -434,18 +441,33 @@ services:
     container_name: kafka-exporter
     command: 
       - "--kafka.server=kafka:9092"
+      - '--verbosity=1'
     ports:
       - "9308:9308"
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - data_pipeline
+  
+  #grafana service 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./Monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./Monitoring/grafana/dashboards:/var/lib/grafana/dashboards
   
 volumes:
   postgres-db-volume:
   kafka_kraft:
   minio_data:
   prometheus-data:
+  grafana-data:
+
 networks:
   data_pipeline:
     driver: bridge 

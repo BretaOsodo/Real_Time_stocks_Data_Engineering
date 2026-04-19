@@ -18,3 +18,19 @@ scrape_configs:
         labels:
           service: 'kafka'
           tier: "Streaming"
+  - job_name: "minio"
+    metrics_path: /minio/v2/metrics/cluster
+    scheme: http
+    static_configs:
+      - targets: ['minio:9000']
+        labels:
+          services: 'minio'
+          tier: "storage"
+  - job_name : "airflow"
+    scrape_interval: 10s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['airflow-apiserver:8080']
+        labels:
+          services: 'airflow-apiserver'
+          tier: "Orchestration"

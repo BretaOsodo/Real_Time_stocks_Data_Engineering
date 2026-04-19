@@ -250,7 +250,7 @@ def Streaming_with_kafka():
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code in ['BucketAlreadyOwnedByYou', 'BucketAlreadyExists']:
-                logger.error(f'Bucket alreadt exists:{minio_bucket}')
+                logger.error(f'Bucket already exists:{minio_bucket}')
             else:
                 logger.error(f'Failed to create the bucket:{e}')
                 raise 
