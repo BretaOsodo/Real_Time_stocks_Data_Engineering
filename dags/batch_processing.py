@@ -180,6 +180,11 @@ def batch_processing():
 
             raise
 
+        
+        #returning the path of the bucket
+        logger.info('Returning the path of the file ')
+        return f's3://{minio_bucket}/{object_key}'
+
 
 
         
