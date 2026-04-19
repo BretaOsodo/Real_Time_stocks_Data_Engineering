@@ -293,8 +293,8 @@ Edit `.env` with your credentials:
 ALPHA_VANTAGE_API_KEY=your_key_here
 
 # MinIO
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
+MINIO_ACCESS_KEY=mini_admin
+MINIO_SECRET_KEY=123456789
 MINIO_ENDPOINT=http://minio:9000
 
 # Kafka
@@ -326,25 +326,67 @@ docker-compose ps
 | Airflow UI | http://localhost:8080 | airflow / airflow |
 | MinIO Console | http://localhost:9001 | minioadmin / minioadmin |
 | Grafana | http://localhost:3000 | admin / admin |
-| Prometheus | http://localhost:9090 | — |
-| Spark UI | http://localhost:8081 | — |
+| Prometheus | http://localhost:9094 | — |
+| Spark UI | http://localhost:9090 | — |
 
 ### 5. Trigger the Pipelines
 
-**Batch pipeline:**
+**Batch pipeline and Streaming pipeline:**
+Open your preferred browser and navigate to http://localhost:8080. Log in using the credentials below:
+
+
+Username: airflow
+
+
+Password: airflow
+
+
+Once logged in, go to the DAGs section and locate your workflow. Hover over the desired DAG and click the play (▶) button to trigger it manually.
+
+### 6. Spark set up 
+**Spark_streaming_job:**
+Access MinIO container 
 ```bash
-# Via Airflow UI — enable the `batch_processing` DAG
-# Or trigger manually:
-docker exec airflow-scheduler airflow dags trigger batch_processing
+docker exec -it minio bash 
+```
+Configure MinIO Client(mc)
+
+```bash
+mc alias set local http://minio:9000 minio_admin 123456789
+mc ls local
+```
+Create bucket for processed data
+```bash 
+
+mc mb local/processed-data
 ```
 
-**Streaming pipeline:**
-```bash
-# Via Airflow UI — enable the `streaming_with_kafka` DAG
-docker exec airflow-scheduler airflow dags trigger streaming_with_kafka
+Access Spark Master Container 
+```bash 
+docker exec -it spark-master bash 
 ```
 
-### 6. Tear Down
+Create Checkpoint Directory
+```bash 
+mkdir -p /tmp/spark_checkpoints/raw
+chmod -R 777 /tmp/spark_checkpoints
+```
+Run Spark Job
+```bash
+/opt/spark/bin/spark-submit \
+--master spark://spark-master:7077 \
+--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 \
+/opt/spark_jobs/spark_streaming_jobs.py
+
+```
+Run Spark batching job 
+```bash
+/opt/spark/bin/spark-submit \
+--master spark://spark-master:7077 \
+--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 \
+/opt/spark_jobs/spark_batching_jobs.py
+```
+### 7. Tear Down
 
 ```bash
 docker-compose down -v   # -v removes volumes (clears MinIO data and Kafka offsets)
@@ -381,7 +423,6 @@ Alert rules in `Monitoring/prometheus/rules/alert_rules.yml` cover:
 |---|---|---|
 | `KafkaConsumerLagHigh` | Lag > 1000 messages for 5 min | Warning |
 | `SparkJobFailed` | Executor exits with non-zero code | Critical |
-| `DataFreshnessBreach` | No new records written to MinIO in 30 min | Warning |
 
 ---
 
@@ -422,42 +463,32 @@ Partitioning by `/year/month/` allows query engines (Spark, Trino, Athena) to sk
 
 **Fix:** Added the JARs to the custom `Dockerfile.spark` and configured the SparkSession with:
 ```python
-spark = SparkSession.builder \
-    .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
-    .config("spark.hadoop.fs.s3a.access.key", os.getenv("MINIO_ACCESS_KEY")) \
-    .config("spark.hadoop.fs.s3a.secret.key", os.getenv("MINIO_SECRET_KEY")) \
-    .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+spark = SparkSession.builder.appName('apple_stocks_streaming')\
+    .config("spark.hadoop.fs.s3a.impl","org.apache.hadoop.fs.s3a.S3AFileSystem")\
+    .config("spark.hadoop.fs.s3a.access.key",'minio_admin')\
+    .config("spark.hadoop.fs.s3a.secret.key",'123456789')\
+    .config("spark.hadoop.fs.s3a.connection.timeout", "60000") \
+    .config("spark.hadoop.fs.s3a.attempts.maximum", "3") \
+    .config("spark.hadoop.fs.s3a.endpoint",'http://minio:9000')\
+    .config("spark.hadoop.fs.s3a.path.style.access",'true')\
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+    .config('spark.sql.adaptive.enabled','true')\
+    .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
+    .config("spark.sql.adaptive.coalescePartitions.enabled",'true')\
+    .config('spark.hadoop.fs.s3a.aws.credentials.provider','org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider')\
     .getOrCreate()
 ```
 The `path.style.access=true` setting is critical — MinIO does not support virtual-hosted-style S3 URLs by default.
 
 ---
 
-### 3. Kafka Connectivity from Spark
-**Problem:** Spark Structured Streaming could not connect to Kafka, throwing `org.apache.kafka.common.errors.TimeoutException`.
-
-**Root cause:** Kafka was advertising its internal Docker hostname (`kafka:9092`) as the bootstrap server. Spark, running in a separate container, could reach this hostname, but the advertised listener in Kafka's config was set to `localhost:9092` — unreachable from other containers.
-
-**Fix:** Configured two listeners in Kafka:
-```yaml
-KAFKA_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
-KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
-KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-```
-Spark connects via `kafka:9092` (internal); external tools connect via `localhost:29092`.
-
----
 
 ## 🔮 Future Improvements
 
 - [ ] **dbt integration** — add a semantic/transformation layer on top of MinIO for modular, testable SQL models
 - [ ] **Great Expectations** — data quality checks and schema validation between pipeline stages
 - [ ] **Cloud deployment** — migrate to AWS (MSK + EMR + S3) or GCP (Pub/Sub + Dataproc + GCS) with Terraform IaC
-- [ ] **Delta Lake** — replace raw Parquet with Delta format for ACID transactions, time travel, and schema evolution
-- [ ] **Expand to multi-ticker** — generalise the pipeline beyond IBM to support a configurable list of stock symbols
-- [ ] **ML integration** — feed enriched Parquet data into a feature store for price prediction models
+-[ ]  **Testing**- Testing to test every function in the project
 - [ ] **CI/CD pipeline** — GitHub Actions for automated testing, Docker image builds, and DAG validation on every push
 
 ---
@@ -469,11 +500,7 @@ Data Engineer | Nairobi, Kenya
 
 Building data systems for African markets — from real-time pipelines to ML infrastructure.
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=flat&logo=linkedin)](https://linkedin.com/in/<your-profile>)
-[![GitHub](https://img.shields.io/badge/GitHub-Follow-181717?style=flat&logo=github)](https://github.com/<your-username>)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=flat&logo=linkedin)](www.linkedin.com/in/breta-odhiambo)
 
 ---
 
-## 📄 License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
